@@ -1,0 +1,19 @@
+---
+id: closest-plane
+name: Closest Plane + Arrow
+summary: Nearest ADS-B plane from your own receiver, with look-direction arrow
+desc: 'Uses your local dump1090/readsb aircraft.json (no API key): shows the closest airborne aircraft — callsign, distance + compass, altitude — plus an arrow rotated to the relative bearing from the direction your screen faces. Set Facing to your screen''s compass heading.'
+author: jbgolds
+fileName: closestplane.star
+packageName: closestplane
+recommendedInterval: 1
+supports2x: false
+category: transit
+tags:
+  - aviation
+  - aircraft
+  - adsb
+  - flight
+  - local
+published: '2026-10-11T00:00:00Z'
+updated: '2026-10-11T00:00:00Z'

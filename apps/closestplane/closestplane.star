@@ -1,0 +1,242 @@
+"""Closest Plane — nearest ADS-B aircraft from YOUR receiver, with a look-direction arrow.
+
+Data: dump1090/readsb aircraft.json served on your LAN (no API key, fully local).
+Renders on 64x32: callsign, distance + compass, altitude, and an arrow rotated to
+the RELATIVE bearing (0 = straight ahead of where the Tidbyt faces).
+Set FACING to the compass direction your screen faces (0-359).
+"""
+
+load("encoding/json.star", "json")
+load("http.star", "http")
+load("math.star", "math")
+load("render.star", "render")
+load("schema.star", "schema")
+
+DEFAULT_DATA_URL = "http://192.168.0.246:8091/aircraft.json"
+DEFAULT_LOCATION = '{"lat": "40.73194", "lng": "-73.96111", "locality": "Brooklyn, NY"}'
+DEFAULT_LAT = 40.73194
+DEFAULT_LON = -73.96111
+DEFAULT_FACING = "100"
+DEFAULT_RADIUS_NM = "60"
+
+TTL_SECONDS = 15  # local LAN data: refresh fast
+STALE_SECONDS = 30  # drop records whose position is older than this
+
+EARTH_NM = 3440.065  # mean earth radius in nautical miles
+NM_TO_MI = 1.15078
+
+ACCENT = "#ffb733"  # amber
+DETAIL = "#8aa0c0"  # dim blue-grey
+
+# Bold arrow pointing up (ahead). Rotated in-SVG by relative bearing:
+# 0 = straight ahead, 90 = to your right, 180 = behind, 270 = to your left.
+# Format args: (rotation degrees, fill color).
+_ARROW_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><g transform="rotate(%d 8 8)"><path fill="%s" d="M7 15 L7 6.5 L3.5 10 L2 8.5 L8 2 L14 8.5 L12.5 10 L9 6.5 L9 15 Z"/></g></svg>'
+
+COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+def _isnum(v):
+    return type(v) == "int" or type(v) == "float"
+
+def _isnum_str(s):
+    if type(s) != "string" or not s:
+        return False
+    has_digit = False
+    for c in s.elems():
+        if c >= "0" and c <= "9":
+            has_digit = True
+        elif c != "." and c != "-":
+            return False
+    return has_digit
+
+def _to_float(v, default):
+    if _isnum(v):
+        return float(v)
+    if _isnum_str(v):
+        return float(v)
+    return default
+
+def _haversine_nm(lat1, lon1, lat2, lon2):
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    s1 = math.sin(dp / 2)
+    s2 = math.sin(dl / 2)
+    a = s1 * s1 + math.cos(p1) * math.cos(p2) * s2 * s2
+    return 2 * EARTH_NM * math.asin(math.sqrt(a))
+
+def _bearing(lat1, lon1, lat2, lon2):
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+def _compass(deg):
+    return COMPASS[int(math.round(deg / 45.0)) % 8]
+
+def _one_dp(x):
+    v = int(math.round(x * 10))
+    return "%d.%d" % (v // 10, v % 10)
+
+def _callsign(ac):
+    flight = ac.get("flight")
+    if type(flight) == "string" and flight.strip():
+        return flight.strip()
+    hex = ac.get("hex")
+    if type(hex) == "string" and hex:
+        return hex.upper()
+    return "UNKNOWN"
+
+def _arrow(rel_brg, color):
+    angle = int(math.round(rel_brg)) % 360
+    return render.Image(src = _ARROW_SVG % (angle, color), width = 20, height = 20)
+
+def _line(text, font, color, width):
+    return render.Marquee(width = width, child = render.Text(text, font = font, color = color))
+
+def _select(aclist, lat, lon, radius_nm, only_airborne):
+    best = None
+    best_dist = 1e9
+    for ac in aclist:
+        if type(ac) != "dict":
+            continue
+        aclat = ac.get("lat")
+        aclon = ac.get("lon")
+        if not _isnum(aclat) or not _isnum(aclon):
+            continue
+        seen_pos = ac.get("seen_pos")
+        if _isnum(seen_pos) and seen_pos > STALE_SECONDS:
+            continue
+        if only_airborne and ac.get("alt_baro") == "ground":
+            continue
+        dist = _haversine_nm(lat, lon, aclat, aclon)
+        if dist > radius_nm:
+            continue
+        brg = _bearing(lat, lon, aclat, aclon)
+        if dist < best_dist:
+            best = (dist, brg, ac)
+            best_dist = dist
+    return best
+
+def _render_aircraft(target, facing):
+    dist, brg, ac = target
+    rel = (brg - facing + 360) % 360
+    if rel <= 180:
+        rel_txt = "R%d" % int(math.round(rel))
+    else:
+        rel_txt = "L%d" % int(math.round(360 - rel))
+
+    alt = ac.get("alt_baro")
+    if alt == "ground":
+        alt_txt = "GND"
+    elif _isnum(alt):
+        alt_txt = "%dft" % int(alt)
+    else:
+        alt_txt = "---"
+
+    line2 = "%smi %s" % (_one_dp(dist * NM_TO_MI), _compass(brg))
+    line3 = "%s %s" % (alt_txt, rel_txt)
+
+    return render.Root(
+        child = render.Row(
+            expanded = True,
+            main_align = "space_between",
+            cross_align = "center",
+            children = [
+                _arrow(rel, ACCENT),
+                render.Column(
+                    main_align = "space_between",
+                    children = [
+                        _line(_callsign(ac), "tb-8", ACCENT, 42),
+                        _line(line2, "tom-thumb", DETAIL, 42),
+                        _line(line3, "tom-thumb", DETAIL, 42),
+                    ],
+                ),
+            ],
+        ),
+    )
+
+def _frame_message(title, sub):
+    children = [render.Text(title, font = "tb-8", color = DETAIL)]
+    if sub:
+        children.append(render.Text(sub, font = "tom-thumb", color = DETAIL))
+    return render.Root(
+        child = render.Box(
+            child = render.Column(
+                main_align = "center",
+                cross_align = "center",
+                children = children,
+            ),
+        ),
+    )
+
+def main(config):
+    loc = json.decode(config.get("location") or DEFAULT_LOCATION)
+    if type(loc) != "dict":
+        loc = {}
+    lat = _to_float(loc.get("lat"), DEFAULT_LAT)
+    lon = _to_float(loc.get("lng"), DEFAULT_LON)
+
+    facing = _to_float(config.get("facing") or DEFAULT_FACING, 100.0) % 360
+    radius_nm = _to_float(config.get("radius_nm") or DEFAULT_RADIUS_NM, 60.0)
+    only_airborne = config.bool("only_airborne", True)
+    data_url = config.str("data_url", DEFAULT_DATA_URL)
+
+    resp = http.get(data_url, ttl_seconds = TTL_SECONDS)
+    if resp.status_code != 200:
+        return _frame_message("NO SIGNAL", "rcvr offline")
+
+    data = resp.json()
+    aclist = data.get("aircraft") if type(data) == "dict" else None
+    if type(aclist) != "list":
+        return _frame_message("NO DATA", "bad feed")
+
+    target = _select(aclist, lat, lon, radius_nm, only_airborne)
+    if target == None:
+        return _frame_message("SKY CLEAR", "no traffic")
+
+    return _render_aircraft(target, facing)
+
+def get_schema():
+    return schema.Schema(
+        version = "1",
+        fields = [
+            schema.Location(
+                id = "location",
+                name = "Location",
+                desc = "Receiver/observer location.",
+                icon = "locationDot",
+            ),
+            schema.Text(
+                id = "facing",
+                name = "Facing (deg)",
+                desc = "Compass direction the screen faces, 0-359.",
+                icon = "compass",
+                default = DEFAULT_FACING,
+            ),
+            schema.Text(
+                id = "data_url",
+                name = "ADS-B JSON URL",
+                desc = "dump1090/readsb aircraft.json URL.",
+                icon = "towerBroadcast",
+                default = DEFAULT_DATA_URL,
+            ),
+            schema.Text(
+                id = "radius_nm",
+                name = "Radius (nm)",
+                desc = "Max range in nautical miles.",
+                icon = "rulerHorizontal",
+                default = DEFAULT_RADIUS_NM,
+            ),
+            schema.Toggle(
+                id = "only_airborne",
+                name = "Airborne only",
+                desc = "Skip aircraft on the ground.",
+                icon = "planeUp",
+                default = True,
+            ),
+        ],
+    )
