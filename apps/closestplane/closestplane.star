@@ -203,8 +203,7 @@ def _alt_compact(alt):
     return "%dft" % alt
 
 def _select(aclist, lat, lon, radius_nm, only_airborne, front_only, facing):
-    best = None
-    best_dist = 1e9
+    ranked = []
     for ac in aclist:
         if type(ac) != "dict":
             continue
@@ -225,12 +224,38 @@ def _select(aclist, lat, lon, radius_nm, only_airborne, front_only, facing):
             rel = (brg - facing + 360) % 360
             if rel > 90 and rel < 270:
                 continue
-        if dist < best_dist:
-            best = (dist, brg, ac)
-            best_dist = dist
-    return best
+        ranked.append((dist, brg, ac))
+    ranked = sorted(ranked, key = _rank_key)
+    return ranked
 
-def _render_aircraft(target, facing):
+def _rank_key(rec):
+    return rec[0]
+
+# Ghost-position guard: a plane whose whole route (both endpoints) is far
+# from the site is almost certainly a misdecoded position, not a visitor.
+# (e.g. an SFO>SEA flight "2mi away" over Brooklyn.) Falls back to showing
+# it anyway if nothing else is around.
+GHOST_NM = 500
+
+def _endpoint_dist_nm(ep, lat, lon):
+    if type(ep) != "dict":
+        return None
+    elat = _to_float(ep.get("latitude"), None)
+    elon = _to_float(ep.get("longitude"), None)
+    if elat == None or elon == None:
+        return None
+    return _haversine_nm(lat, lon, elat, elon)
+
+def _is_ghost(fr, lat, lon):
+    if type(fr) != "dict":
+        return False
+    o = _endpoint_dist_nm(fr.get("origin"), lat, lon)
+    d = _endpoint_dist_nm(fr.get("destination"), lat, lon)
+    if o == None or d == None:
+        return False
+    return o > GHOST_NM and d > GHOST_NM
+
+def _render_aircraft(target, facing, fr):
     dist, brg, ac = target
     rel = (brg - facing + 360) % 360
     if rel <= 180:
@@ -250,13 +275,12 @@ def _render_aircraft(target, facing):
 
     line2 = ((type_txt + " ") if type_txt else "") + alt_txt
 
-    # Route + airline from adsbdb callsign lookup (cached 1h).
+    # Route + airline from adsbdb callsign lookup (cached 1h, pre-fetched).
     dist_mi = int(math.round(dist * NM_TO_MI))
     line3 = "%smi %s %s" % (dist_mi, _compass(brg), rel_txt)
     label = _callsign(ac)
     flight = ac.get("flight")
     if type(flight) == "string" and flight.strip():
-        fr = _adsbdb_route(flight)
         label = _airline_label(flight, fr)
         if type(fr) == "dict":
             org = fr.get("origin") or {}
@@ -340,13 +364,32 @@ def main(config):
     if type(aclist) != "list":
         return _frame_message("NO DATA", "bad feed")
 
-    target = _select(aclist, lat, lon, radius_nm, only_airborne, front_only, facing)
-    if target == None:
+    ranked = _select(aclist, lat, lon, radius_nm, only_airborne, front_only, facing)
+    if not ranked:
         if front_only:
             return _frame_message("NONE AHEAD", "clear ahead")
         return _frame_message("SKY CLEAR", "no traffic")
 
-    return _render_aircraft(target, facing)
+    # Walk nearest-first, skipping ghost positions (both route endpoints far
+    # from the site). Falls back to the nearest if all look odd.
+    target = ranked[0]
+    fr = None
+    picked = False
+    for cand in ranked[:5]:
+        dist_c, brg_c, ac_c = cand
+        flight_c = ac_c.get("flight")
+        fr_c = _adsbdb_route(flight_c) if type(flight_c) == "string" and flight_c.strip() else None
+        if not _is_ghost(fr_c, lat, lon):
+            target = cand
+            fr = fr_c
+            picked = True
+            break
+    if not picked:
+        dist_c, brg_c, ac_c = target
+        flight_c = ac_c.get("flight")
+        fr = _adsbdb_route(flight_c) if type(flight_c) == "string" and flight_c.strip() else None
+
+    return _render_aircraft(target, facing, fr)
 
 def get_schema():
     return schema.Schema(
