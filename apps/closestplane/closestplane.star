@@ -124,6 +124,9 @@ def _adsbdb_route(flight):
     return r.get("flightroute")
 
 def _line(text, font, color, width):
+    # Static text when it fits; scrolls only on overflow.
+    if len(text) <= (8 if font == "tb-8" else 12):
+        return render.Text(text, font = font, color = color)
     return render.Marquee(width = width, child = render.Text(text, font = font, color = color))
 
 def _select(aclist, lat, lon, radius_nm, only_airborne):
@@ -179,8 +182,9 @@ def _render_aircraft(target, facing):
 
     line2 = ((type_txt + " ") if type_txt else "") + alt_txt
 
-    # Route from adsbdb callsign lookup (cached 1h).
-    line3 = "%smi %s %s" % (_one_dp(dist * NM_TO_MI), _compass(brg), rel_txt)
+    # Route from adsbdb callsign lookup (cached 1h). Whole miles keep it static.
+    dist_mi = int(math.round(dist * NM_TO_MI))
+    line3 = "%smi %s %s" % (dist_mi, _compass(brg), rel_txt)
     flight = ac.get("flight")
     if type(flight) == "string" and flight.strip():
         fr = _adsbdb_route(flight)
@@ -190,7 +194,7 @@ def _render_aircraft(target, facing):
             oc = org.get("iata_code") if type(org) == "dict" else None
             dc = dst.get("iata_code") if type(dst) == "dict" else None
             if type(oc) == "string" and oc and type(dc) == "string" and dc:
-                line3 = "%s>%s %smi" % (oc, dc, _one_dp(dist * NM_TO_MI))
+                line3 = "%s>%s %smi" % (oc, dc, dist_mi)
 
     return render.Root(
         child = render.Row(
