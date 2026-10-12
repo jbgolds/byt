@@ -31,7 +31,7 @@ DETAIL = "#8aa0c0"  # dim blue-grey
 # Bold arrow pointing up (ahead). Rotated in-SVG by relative bearing:
 # 0 = straight ahead, 90 = to your right, 180 = behind, 270 = to your left.
 # Format args: (rotation degrees, fill color).
-_ARROW_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><g transform="rotate(%d 8 8)"><path fill="%s" d="M7 15 L7 6.5 L3.5 10 L2 8.5 L8 2 L14 8.5 L12.5 10 L9 6.5 L9 15 Z"/></g></svg>'
+_ARROW_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><g transform="rotate(%d 10 10)"><path fill="%s" d="M8 19 L8 9 L4 13 L2 11 L10 3 L18 11 L16 13 L12 9 L12 19 Z"/></g></svg>'
 
 COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
@@ -92,7 +92,7 @@ def _callsign(ac):
 
 def _arrow(rel_brg, color):
     angle = int(math.round(rel_brg)) % 360
-    return render.Image(src = _ARROW_SVG % (angle, color), width = 20, height = 20)
+    return render.Image(src = _ARROW_SVG % (angle, color), width = 24, height = 24)
 
 def _line(text, font, color, width):
     return render.Marquee(width = width, child = render.Text(text, font = font, color = color))
@@ -150,9 +150,9 @@ def _render_aircraft(target, facing):
                 render.Column(
                     main_align = "space_between",
                     children = [
-                        _line(_callsign(ac), "tb-8", ACCENT, 42),
-                        _line(line2, "tom-thumb", DETAIL, 42),
-                        _line(line3, "tom-thumb", DETAIL, 42),
+                        _line(_callsign(ac), "tb-8", ACCENT, 38),
+                        _line(line2, "tom-thumb", DETAIL, 38),
+                        _line(line3, "tom-thumb", DETAIL, 38),
                     ],
                 ),
             ],
