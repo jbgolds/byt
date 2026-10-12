@@ -92,7 +92,34 @@ def _callsign(ac):
 
 def _arrow(rel_brg, color):
     angle = int(math.round(rel_brg)) % 360
-    return render.Image(src = _ARROW_SVG % (angle, color), width = 8, height = 8)
+    return render.Image(src = _ARROW_SVG % (angle, color), width = 10, height = 10)
+
+# Operator fallback when adsbdb has no route/airline (regionals often missing).
+# Maps ICAO operator code -> short brand shown on screen.
+OPERATORS = {
+    "DAL": "DELTA",
+    "EDV": "DELTA",
+    "AAL": "AMERICAN",
+    "JIA": "AMERICAN",
+    "PDT": "AMERICAN",
+    "ENY": "AMERICAN",
+    "UAL": "UNITED",
+    "RPA": "REPUBLIC",
+    "JBU": "JETBLUE",
+    "SWA": "SOUTHWEST",
+    "ASA": "ALASKA",
+    "HAL": "HAWAIIAN",
+    "FDX": "FEDEX",
+    "UPS": "UPS",
+    "BAW": "BRITISH",
+    "VIR": "VIRGIN",
+    "DLH": "LUFTHANSA",
+    "AFR": "AIRFRANCE",
+    "KLM": "KLM",
+    "EIN": "AERLINGUS",
+    "ACA": "AIRCANADA",
+    "WJA": "WESTJET",
+}
 
 def _airline_label(flight, fr):
     f = flight.strip().upper() if type(flight) == "string" else ""
@@ -119,6 +146,12 @@ def _airline_label(flight, fr):
         full = (short + " " + num) if num else short
         if len(full) <= 8:
             return full
+    branded = OPERATORS.get(op)
+    if branded:
+        full = (branded + " " + num) if num else branded
+        if len(full) <= 8:
+            return full
+        return full  # brands scroll rather than show a raw code
     # Compact fallback always fits statically: RPA5788, DAL123.
     compact = op + num
     return compact if len(compact) <= 8 else f[:8]
@@ -155,7 +188,7 @@ def _adsbdb_route(flight):
 def _line(text, font, color, width):
     # Static text when it fits (tb-8: 8 chars, tom-thumb: 11 chars);
     # scrolls only on overflow.
-    if len(text) <= (8 if font == "tb-8" else 11):
+    if len(text) <= (8 if font == "tb-8" else 12):
         return render.Text(text, font = font, color = color)
     return render.Marquee(width = width, child = render.Text(text, font = font, color = color))
 
@@ -169,7 +202,7 @@ def _alt_compact(alt):
         return "%s.%sk" % (alt // 1000, (alt % 1000) // 100)
     return "%dft" % alt
 
-def _select(aclist, lat, lon, radius_nm, only_airborne):
+def _select(aclist, lat, lon, radius_nm, only_airborne, front_only, facing):
     best = None
     best_dist = 1e9
     for ac in aclist:
@@ -188,6 +221,10 @@ def _select(aclist, lat, lon, radius_nm, only_airborne):
         if dist > radius_nm:
             continue
         brg = _bearing(lat, lon, aclat, aclon)
+        if front_only:
+            rel = (brg - facing + 360) % 360
+            if rel > 90 and rel < 270:
+                continue
         if dist < best_dist:
             best = (dist, brg, ac)
             best_dist = dist
@@ -234,13 +271,13 @@ def _render_aircraft(target, facing):
     # ahead, 90 = right edge, 180 = bottom/behind, 270 = left edge.
     # Positioned with spacer boxes (Stack overlays, Column/Row place exactly).
     rad = math.radians(rel)
-    ax = int(math.round(32 + 30 * math.sin(rad))) - 4
-    ay = int(math.round(16 - 15 * math.cos(rad))) - 4
-    ax = 0 if ax < 0 else (56 if ax > 56 else ax)
-    ay = 0 if ay < 0 else (24 if ay > 24 else ay)
+    ax = int(math.round(32 + 29 * math.sin(rad))) - 5
+    ay = int(math.round(16 - 14 * math.cos(rad))) - 5
+    ax = 0 if ax < 0 else (54 if ax > 54 else ax)
+    ay = 0 if ay < 0 else (22 if ay > 22 else ay)
     arrow_row = render.Row(
         children = [
-            render.Box(width = ax, height = 8),
+            render.Box(width = ax, height = 10),
             _arrow(rel, ACCENT),
         ],
     )
@@ -256,9 +293,9 @@ def _render_aircraft(target, facing):
                         main_align = "center",
                         cross_align = "center",
                         children = [
-                            _line(label, "tb-8", ACCENT, 44),
-                            _line(line2, "tom-thumb", DETAIL, 44),
-                            _line(line3, "tom-thumb", DETAIL, 44),
+                            _line(label, "tb-8", ACCENT, 48),
+                            _line(line2, "tom-thumb", DETAIL, 48),
+                            _line(line3, "tom-thumb", DETAIL, 48),
                         ],
                     ),
                 ),
@@ -291,6 +328,7 @@ def main(config):
     facing = _to_float(config.get("facing") or DEFAULT_FACING, 100.0) % 360
     radius_nm = _to_float(config.get("radius_nm") or DEFAULT_RADIUS_NM, 60.0)
     only_airborne = config.bool("only_airborne", True)
+    front_only = config.bool("front_only", True)
     data_url = config.str("data_url", DEFAULT_DATA_URL)
 
     resp = http.get(data_url, ttl_seconds = TTL_SECONDS)
@@ -302,8 +340,10 @@ def main(config):
     if type(aclist) != "list":
         return _frame_message("NO DATA", "bad feed")
 
-    target = _select(aclist, lat, lon, radius_nm, only_airborne)
+    target = _select(aclist, lat, lon, radius_nm, only_airborne, front_only, facing)
     if target == None:
+        if front_only:
+            return _frame_message("NONE AHEAD", "clear ahead")
         return _frame_message("SKY CLEAR", "no traffic")
 
     return _render_aircraft(target, facing)
@@ -344,6 +384,13 @@ def get_schema():
                 name = "Airborne only",
                 desc = "Skip aircraft on the ground.",
                 icon = "planeUp",
+                default = True,
+            ),
+            schema.Toggle(
+                id = "front_only",
+                name = "Ahead only",
+                desc = "Only aircraft in front of the screen (window view).",
+                icon = "eye",
                 default = True,
             ),
         ],
