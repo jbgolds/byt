@@ -92,7 +92,36 @@ def _callsign(ac):
 
 def _arrow(rel_brg, color):
     angle = int(math.round(rel_brg)) % 360
-    return render.Image(src = _ARROW_SVG % (angle, color), width = 24, height = 24)
+    return render.Image(src = _ARROW_SVG % (angle, color), width = 14, height = 14)
+
+ADSBDB_URL = "https://api.adsbdb.com/v0"
+
+def _adsbdb_aircraft(hex):
+    resp = http.get("%s/aircraft/%s" % (ADSBDB_URL, hex.upper()), ttl_seconds = 86400)
+    if resp.status_code != 200:
+        return None
+    data = resp.json()
+    if type(data) != "dict":
+        return None
+    r = data.get("response")
+    if type(r) != "dict":
+        return None
+    ac = r.get("aircraft")
+    if type(ac) != "dict":
+        return None
+    return ac
+
+def _adsbdb_route(flight):
+    resp = http.get("%s/callsign/%s" % (ADSBDB_URL, flight.strip().upper()), ttl_seconds = 3600)
+    if resp.status_code != 200:
+        return None
+    data = resp.json()
+    if type(data) != "dict":
+        return None
+    r = data.get("response")
+    if type(r) != "dict":
+        return None
+    return r.get("flightroute")
 
 def _line(text, font, color, width):
     return render.Marquee(width = width, child = render.Text(text, font = font, color = color))
@@ -137,8 +166,31 @@ def _render_aircraft(target, facing):
     else:
         alt_txt = "---"
 
-    line2 = "%smi %s" % (_one_dp(dist * NM_TO_MI), _compass(brg))
-    line3 = "%s %s" % (alt_txt, rel_txt)
+    # Aircraft type + registration from adsbdb (cached 24h).
+    type_txt = None
+    ac_info = _adsbdb_aircraft(ac.get("hex") or "")
+    if ac_info:
+        t = ac_info.get("icao_type")
+        if type(t) == "string" and t:
+            type_txt = t
+        reg = ac_info.get("registration")
+        if type(reg) == "string" and reg:
+            type_txt = ((type_txt + " ") if type_txt else "") + reg
+
+    line2 = ((type_txt + " ") if type_txt else "") + alt_txt
+
+    # Route from adsbdb callsign lookup (cached 1h).
+    line3 = "%smi %s %s" % (_one_dp(dist * NM_TO_MI), _compass(brg), rel_txt)
+    flight = ac.get("flight")
+    if type(flight) == "string" and flight.strip():
+        fr = _adsbdb_route(flight)
+        if type(fr) == "dict":
+            org = fr.get("origin") or {}
+            dst = fr.get("destination") or {}
+            oc = org.get("iata_code") if type(org) == "dict" else None
+            dc = dst.get("iata_code") if type(dst) == "dict" else None
+            if type(oc) == "string" and oc and type(dc) == "string" and dc:
+                line3 = "%s>%s %smi" % (oc, dc, _one_dp(dist * NM_TO_MI))
 
     return render.Root(
         child = render.Row(
@@ -150,9 +202,9 @@ def _render_aircraft(target, facing):
                 render.Column(
                     main_align = "space_between",
                     children = [
-                        _line(_callsign(ac), "tb-8", ACCENT, 38),
-                        _line(line2, "tom-thumb", DETAIL, 38),
-                        _line(line3, "tom-thumb", DETAIL, 38),
+                        _line(_callsign(ac), "tb-8", ACCENT, 48),
+                        _line(line2, "tom-thumb", DETAIL, 48),
+                        _line(line3, "tom-thumb", DETAIL, 48),
                     ],
                 ),
             ],
