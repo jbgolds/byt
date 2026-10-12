@@ -153,10 +153,21 @@ def _adsbdb_route(flight):
     return r.get("flightroute")
 
 def _line(text, font, color, width):
-    # Static text when it fits; scrolls only on overflow.
-    if len(text) <= (8 if font == "tb-8" else 12):
+    # Static text when it fits (tb-8: 8 chars, tom-thumb: 11 chars);
+    # scrolls only on overflow.
+    if len(text) <= (8 if font == "tb-8" else 11):
         return render.Text(text, font = font, color = color)
     return render.Marquee(width = width, child = render.Text(text, font = font, color = color))
+
+def _alt_compact(alt):
+    if alt == "ground":
+        return "GND"
+    if not _isnum(alt):
+        return "---"
+    alt = int(alt)
+    if alt >= 10000:
+        return "%s.%sk" % (alt // 1000, (alt % 1000) // 100)
+    return "%dft" % alt
 
 def _select(aclist, lat, lon, radius_nm, only_airborne):
     best = None
@@ -190,24 +201,15 @@ def _render_aircraft(target, facing):
     else:
         rel_txt = "L%d" % int(math.round(360 - rel))
 
-    alt = ac.get("alt_baro")
-    if alt == "ground":
-        alt_txt = "GND"
-    elif _isnum(alt):
-        alt_txt = "%dft" % int(alt)
-    else:
-        alt_txt = "---"
+    alt_txt = _alt_compact(ac.get("alt_baro"))
 
-    # Aircraft type + registration from adsbdb (cached 24h).
+    # Aircraft type from adsbdb (cached 24h).
     type_txt = None
     ac_info = _adsbdb_aircraft(ac.get("hex") or "")
     if ac_info:
         t = ac_info.get("icao_type")
         if type(t) == "string" and t:
             type_txt = t
-        reg = ac_info.get("registration")
-        if type(reg) == "string" and reg:
-            type_txt = ((type_txt + " ") if type_txt else "") + reg
 
     line2 = ((type_txt + " ") if type_txt else "") + alt_txt
 
@@ -254,9 +256,9 @@ def _render_aircraft(target, facing):
                         main_align = "center",
                         cross_align = "center",
                         children = [
-                            _line(label, "tb-8", ACCENT, 40),
-                            _line(line2, "tom-thumb", DETAIL, 40),
-                            _line(line3, "tom-thumb", DETAIL, 40),
+                            _line(label, "tb-8", ACCENT, 44),
+                            _line(line2, "tom-thumb", DETAIL, 44),
+                            _line(line3, "tom-thumb", DETAIL, 44),
                         ],
                     ),
                 ),
