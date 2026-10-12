@@ -92,7 +92,36 @@ def _callsign(ac):
 
 def _arrow(rel_brg, color):
     angle = int(math.round(rel_brg)) % 360
-    return render.Image(src = _ARROW_SVG % (angle, color), width = 14, height = 14)
+    return render.Image(src = _ARROW_SVG % (angle, color), width = 8, height = 8)
+
+def _airline_label(flight, fr):
+    f = flight.strip().upper() if type(flight) == "string" else ""
+    if not f:
+        return "UNKNOWN"
+    name = None
+    if type(fr) == "dict":
+        al = fr.get("airline")
+        if type(al) == "dict":
+            n = al.get("name")
+            if type(n) == "string" and n:
+                name = n
+    # Split leading operator letters from the rest (e.g. DAL123 -> DAL + 123).
+    i = 0
+    for c in f.elems():
+        if c >= "A" and c <= "Z":
+            i += 1
+        else:
+            break
+    num = f[i:] if i < len(f) else ""
+    op = f[:i] if i > 0 else f
+    if name:
+        short = name.split(" ")[0].upper()[:8]
+        full = (short + " " + num) if num else short
+        if len(full) <= 8:
+            return full
+    # Compact fallback always fits statically: RPA5788, DAL123.
+    compact = op + num
+    return compact if len(compact) <= 8 else f[:8]
 
 ADSBDB_URL = "https://api.adsbdb.com/v0"
 
@@ -182,12 +211,14 @@ def _render_aircraft(target, facing):
 
     line2 = ((type_txt + " ") if type_txt else "") + alt_txt
 
-    # Route from adsbdb callsign lookup (cached 1h). Whole miles keep it static.
+    # Route + airline from adsbdb callsign lookup (cached 1h).
     dist_mi = int(math.round(dist * NM_TO_MI))
     line3 = "%smi %s %s" % (dist_mi, _compass(brg), rel_txt)
+    label = _callsign(ac)
     flight = ac.get("flight")
     if type(flight) == "string" and flight.strip():
         fr = _adsbdb_route(flight)
+        label = _airline_label(flight, fr)
         if type(fr) == "dict":
             org = fr.get("origin") or {}
             dst = fr.get("destination") or {}
@@ -196,21 +227,40 @@ def _render_aircraft(target, facing):
             if type(oc) == "string" and oc and type(dc) == "string" and dc:
                 line3 = "%s>%s %smi" % (oc, dc, dist_mi)
 
+    # Sweeping edge arrow: rides an ellipse around the text block so it always
+    # sits on the rim in the relative direction of the plane. 0 = top/straight
+    # ahead, 90 = right edge, 180 = bottom/behind, 270 = left edge.
+    # Positioned with spacer boxes (Stack overlays, Column/Row place exactly).
+    rad = math.radians(rel)
+    ax = int(math.round(32 + 30 * math.sin(rad))) - 4
+    ay = int(math.round(16 - 15 * math.cos(rad))) - 4
+    ax = 0 if ax < 0 else (56 if ax > 56 else ax)
+    ay = 0 if ay < 0 else (24 if ay > 24 else ay)
+    arrow_row = render.Row(
+        children = [
+            render.Box(width = ax, height = 8),
+            _arrow(rel, ACCENT),
+        ],
+    )
+    overlay_children = [render.Box(width = 64, height = ay), arrow_row] if ay > 0 else [arrow_row]
+
     return render.Root(
-        child = render.Row(
-            expanded = True,
-            main_align = "space_between",
-            cross_align = "center",
+        child = render.Stack(
             children = [
-                _arrow(rel, ACCENT),
-                render.Column(
-                    main_align = "space_between",
-                    children = [
-                        _line(_callsign(ac), "tb-8", ACCENT, 48),
-                        _line(line2, "tom-thumb", DETAIL, 48),
-                        _line(line3, "tom-thumb", DETAIL, 48),
-                    ],
+                render.Box(
+                    width = 64,
+                    height = 32,
+                    child = render.Column(
+                        main_align = "center",
+                        cross_align = "center",
+                        children = [
+                            _line(label, "tb-8", ACCENT, 40),
+                            _line(line2, "tom-thumb", DETAIL, 40),
+                            _line(line3, "tom-thumb", DETAIL, 40),
+                        ],
+                    ),
                 ),
+                render.Column(children = overlay_children),
             ],
         ),
     )
